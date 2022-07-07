@@ -104,7 +104,8 @@ uninstall: manifests kustomize ## Uninstall APIResourceSchemas and APIExport fro
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUSTOMIZE) build config/default | kubectl apply -f -
+	$(KUSTOMIZE) build config/default | sed 's/controller-runtime-example-widget/widget/' | kubectl apply -f -
+
 
 .PHONY: undeploy
 undeploy: ## Undeploy controller. Call with ignore-not-found=true to ignore resource not found errors during deletion.

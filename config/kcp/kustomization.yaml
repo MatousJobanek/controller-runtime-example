@@ -1,6 +1,7 @@
 resources:
   - today.apiresourceschemas.yaml
   - apiexport.yaml
+  - widget_workspace_type.yaml
 
 configurations:
   - kustomizeconfig.yaml

@@ -6,6 +6,25 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - apis.kcp.dev
+  resources:
+  - apiexports
+  verbs:
+  - create
+  - delete
+  - get
+  - initialize
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apis.kcp.dev
+  resources:
+  - apiexports/status
+  verbs:
+  - get
+- apiGroups:
   - data.my.domain
   resources:
   - widgets
@@ -27,6 +46,33 @@ rules:
   - data.my.domain
   resources:
   - widgets/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - tenancy.kcp.dev
+  resources:
+  - clusterworkspacetypes
+  verbs:
+  - create
+  - delete
+  - get
+  - initialize
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tenancy.kcp.dev
+  resources:
+  - clusterworkspacetypes/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - tenancy.kcp.dev
+  resources:
+  - clusterworkspacetypes/status
   verbs:
   - get
   - patch

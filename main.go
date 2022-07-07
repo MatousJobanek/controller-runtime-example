@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"os"
 
+	apisv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/apis/v1alpha1"
+	"github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -43,8 +45,6 @@ import (
 	// +kubebuilder:scaffold:imports
 
 	"github.com/kcp-dev/controller-runtime-example/controllers"
-
-	apisv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/apis/v1alpha1"
 )
 
 var (
@@ -56,10 +56,18 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(datav1alpha1.AddToScheme(scheme))
+	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 
 	flag.StringVar(&kubeconfigContext, "context", "", "kubeconfig context")
 }
+
+// +kubebuilder:rbac:groups="tenancy.kcp.dev",resources=clusterworkspacetypes,verbs=get;list;watch;create;update;patch;delete;initialize
+// +kubebuilder:rbac:groups="tenancy.kcp.dev",resources=clusterworkspacetypes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups="tenancy.kcp.dev",resources=clusterworkspacetypes/finalizers,verbs=update
+
+// +kubebuilder:rbac:groups="apis.kcp.dev",resources=apiexports,verbs=get;list;watch;create;update;patch;delete;initialize
+// +kubebuilder:rbac:groups="apis.kcp.dev",resources=apiexports/status,verbs=get
 
 func main() {
 	var metricsAddr string
@@ -90,7 +98,7 @@ func main() {
 	setupLog = setupLog.WithValues("api-export", apiExportName)
 
 	setupLog.Info("Looking up virtual workspace URL")
-	cfg, err := restConfigForAPIExport(ctx, restConfig, os.Args[1])
+	cfg, err := restConfigForCWT(ctx, restConfig, "widget")
 	if err != nil {
 		setupLog.Error(err, "error looking up virtual workspace URL")
 	}
@@ -104,21 +112,22 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "68a0532d.my.domain",
+		LeaderElectionConfig:   restConfig,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
 
-	if err = (&controllers.ConfigMapReconciler{
-		Client: mgr.GetClient(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ConfigMap")
+	path, err := getAPIExportPath(ctx, restConfig, os.Args[1])
+	if err != nil {
+		setupLog.Error(err, "error looking up APIExport")
 	}
 
-	if err = (&controllers.WidgetReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+	if err = (&controllers.WidgetInitializer{
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		APIExportPath: path,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Widget")
 		os.Exit(1)
@@ -142,32 +151,52 @@ func main() {
 	}
 }
 
-// restConfigForAPIExport returns a *rest.Config properly configured to communicate with the endpoint for the
-// APIExport's virtual workspace.
-func restConfigForAPIExport(ctx context.Context, cfg *rest.Config, apiExportName string) (*rest.Config, error) {
+// restConfigForCWT returns a *rest.Config properly configured to communicate with the endpoint for the
+// CWT's virtual workspace.
+func restConfigForCWT(ctx context.Context, cfg *rest.Config, apiExportName string) (*rest.Config, error) {
 	scheme := runtime.NewScheme()
-	if err := apisv1alpha1.AddToScheme(scheme); err != nil {
-		return nil, fmt.Errorf("error adding apis.kcp.dev/v1alpha1 to scheme: %w", err)
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		return nil, fmt.Errorf("error adding tenancy.kcp.dev/v1alpha1 to scheme: %w", err)
 	}
 
-	apiExportClient, err := client.New(cfg, client.Options{Scheme: scheme})
+	cwtClient, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
-		return nil, fmt.Errorf("error creating APIExport client: %w", err)
+		return nil, fmt.Errorf("error creating CWT client: %w", err)
 	}
 
-	var apiExport apisv1alpha1.APIExport
+	var cwt v1alpha1.ClusterWorkspaceType
 
-	if err := apiExportClient.Get(ctx, types.NamespacedName{Name: apiExportName}, &apiExport); err != nil {
-		return nil, fmt.Errorf("error getting APIExport %q: %w", apiExportName, err)
+	if err := cwtClient.Get(ctx, types.NamespacedName{Name: apiExportName}, &cwt); err != nil {
+		return nil, fmt.Errorf("error getting CWT %q: %w", apiExportName, err)
 	}
 
-	if len(apiExport.Status.VirtualWorkspaces) < 1 {
+	if len(cwt.Status.VirtualWorkspaces) < 1 {
 		return nil, fmt.Errorf("APIExport %q status.virtualWorkspaces is empty", apiExportName)
 	}
 
 	cfg = rest.CopyConfig(cfg)
 	// TODO(ncdc): sharding support
-	cfg.Host = apiExport.Status.VirtualWorkspaces[0].URL
+	cfg.Host = cwt.Status.VirtualWorkspaces[0].URL
 
 	return cfg, nil
+}
+
+func getAPIExportPath(ctx context.Context, cfg *rest.Config, apiExportName string) (string, error) {
+	scheme := runtime.NewScheme()
+	if err := apisv1alpha1.AddToScheme(scheme); err != nil {
+		return "", fmt.Errorf("error adding apis.kcp.dev/v1alpha1 to scheme: %w", err)
+	}
+
+	apiExportClient, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return "", fmt.Errorf("error creating APIExport client: %w", err)
+	}
+
+	var apiExport apisv1alpha1.APIExport
+
+	if err := apiExportClient.Get(ctx, types.NamespacedName{Name: apiExportName}, &apiExport); err != nil {
+		return "", fmt.Errorf("error getting APIExport %q: %w", apiExportName, err)
+	}
+
+	return apiExport.GetClusterName(), nil
 }
